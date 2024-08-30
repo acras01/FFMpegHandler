@@ -17,13 +17,14 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libswscale/swscale.h>
 #include <libavutil/avutil.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 }
 
 struct ProcessResult {
     std::string message;
-    std::unique_ptr<uint8_t[]> buffer;
+    uint8_t* buffer;
 };
 
 using LogCallback = std::function<void(int, const char*)>;
@@ -31,6 +32,7 @@ static LogCallback g_logCallback = nullptr;
 static jobject globalCallbackRef = nullptr;
 void ffmpeg_log_callback(void* ptr, int level, const char* fmt, va_list vl);
 int interrupt_callback(void* ctx);
+static std::function<AVPixelFormat(AVCodecContext*, const enum AVPixelFormat*)> globalGetFormatLambda;
 
 class FFMpegHandler {
 public:
@@ -40,6 +42,14 @@ public:
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
     using ConnectionCallback = std::function<void()>;
+
+    static AVPixelFormat getFormatWrapper(AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
+        if (globalGetFormatLambda) {
+            return globalGetFormatLambda(ctx, pix_fmts);
+        }
+        std::cerr << "No lambda function defined" << std::endl;
+        return AV_PIX_FMT_NONE;
+    }
 
     std::string connect(
         const char* sourceUrl,
@@ -73,10 +83,18 @@ private:
     AVPacket* avPacket = nullptr;
     AVCodecContext* avCodecCtx = nullptr;
     SwsContext* swsContext = nullptr;
+    int bufferSize = 0;
     uint8_t* buffer = nullptr;
     int videoStreamIndex = -1;
     const AVPixelFormat outputFormat = AV_PIX_FMT_BGR0;
     const AVPixelFormat inputFormat = AV_PIX_FMT_YUV420P;
+
+    //hw decoding
+    const AVHWDeviceType hwDeviceType = AV_HWDEVICE_TYPE_D3D11VA;
+    AVBufferRef* hwDeviceCtx = nullptr;
+    AVFrame* hwFrame = nullptr;
+    AVPixelFormat hwPixFmt = AV_PIX_FMT_NONE;
+    AVPixelFormat inputHwFromat = AV_PIX_FMT_NV12;
 
     AVFormatContext* avOutputCtxUdp = nullptr;
     std::map<int, int> streamMapping;
@@ -93,7 +111,6 @@ private:
     std::string setupUdpOutput();
     void processUdpOutput(AVPacket* packet);
     std::string setupRecordOutput(int width, int height, int sourceFrameRate);
-    std::string setupSubInput();
     void processRecOutput(AVPacket* packet, AVFrame* frame);
     std::string processFrameLoop(FrameCallback callback, int width, int height);
     ProcessResult processFrames(int width, int height);

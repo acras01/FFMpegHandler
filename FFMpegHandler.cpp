@@ -151,6 +151,19 @@ std::string FFMpegHandler::configureDecoder(const int width, const int height) {
         return "Couldn't find decoder";
     }
 
+    for (int i = 0;; ++i) {
+        const AVCodecHWConfig* config = avcodec_get_hw_config(avCodec, i);
+        if (!config) {
+            return "Decoder does not support defined h/w device type";
+        }
+
+        if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 &&
+            config->device_type == hwDeviceType) {
+            hwPixFmt = config->pix_fmt;
+            break;
+        }
+    }
+
     avCodecCtx = avcodec_alloc_context3(avCodec);
     if (!avCodecCtx) {
         return "Couldn't create AVCodecContext";
@@ -164,13 +177,41 @@ std::string FFMpegHandler::configureDecoder(const int width, const int height) {
     avCodecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     avCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 
+    globalGetFormatLambda = [this](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) -> AVPixelFormat {
+        const enum AVPixelFormat* p;
+        for (p = pix_fmts; *p != -1; p++) {
+            if (*p == this->hwPixFmt)
+                return *p;
+        }
+        std::cout << "Failed to get HW surface format" << std::endl;
+        return AV_PIX_FMT_NONE;
+        };
+
+    avCodecCtx->get_format = getFormatWrapper;
+
+    if (av_hwdevice_ctx_create(&hwDeviceCtx, hwDeviceType, nullptr, nullptr, 0) < 0) {
+        return "Failed to create specified HW device";
+    }
+
+    avCodecCtx->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+
     if (avcodec_open2(avCodecCtx, avCodec, nullptr) < 0) {
         return "Couldn't open codec";
     }
 
+    swsContext = sws_getContext(
+        width, height, inputHwFromat,
+        width, height, outputFormat,
+        SWS_BILINEAR, nullptr, nullptr, nullptr
+    );
+    if (!swsContext) {
+        return "Couldn't initialize SwsContext";
+    }
+
+    hwFrame = av_frame_alloc();
     swFrame = av_frame_alloc();
     pFrameRGB = av_frame_alloc();
-    if (!swFrame || !pFrameRGB) {
+    if (!hwFrame || !swFrame || !pFrameRGB) {
         return "Couldn't allocate AVFrame";
     }
 
@@ -181,8 +222,11 @@ std::string FFMpegHandler::configureDecoder(const int width, const int height) {
         return "Failed to allocate RGB frame buffer";
     }
 
-    int numBytes = av_image_get_buffer_size(outputFormat, width, height, 1);
-    buffer = (uint8_t*)av_malloc(numBytes);
+    bufferSize = av_image_get_buffer_size(outputFormat, width, height, 1);
+    buffer = (uint8_t*)av_malloc(bufferSize);
+    if (!buffer) {
+        return "Failed to allocate buffer";
+    }
     av_image_fill_arrays(pFrameRGB->data, pFrameRGB->linesize, buffer, outputFormat, width, height, 1);
 
     avPacket = av_packet_alloc();
@@ -347,7 +391,7 @@ std::string FFMpegHandler::processFrameLoop(FrameCallback callback, int width, i
         auto processResult = processFrames(width, height);
 
         if (processResult.message.empty() && processResult.buffer) {
-            callback(processResult.buffer.get(), av_image_get_buffer_size(outputFormat, width, height, 1));
+            callback(processResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
         }
     }
 
@@ -387,35 +431,33 @@ ProcessResult FFMpegHandler::processVideoFrame(const int width, const int height
         return { "Failed to send AVPacket to decoder", nullptr };
     }
 
-    while (avcodec_receive_frame(avCodecCtx, swFrame) >= 0) {
-        if (!swsContext) {
-            swsContext = sws_getContext(
-                width, height, inputFormat,
-                width, height, outputFormat,
-                SWS_BILINEAR, nullptr, nullptr, nullptr
-            );
-            if (!swsContext) {
-                return { "Couldn't initialize SwsContext", nullptr };
+    while (avcodec_receive_frame(avCodecCtx, hwFrame) >= 0) {
+        AVFrame* tmpFrame;
+        if (hwFrame->format == hwPixFmt) {
+            if (av_hwframe_transfer_data(swFrame, hwFrame, 0) < 0) {
+                std::cout << "Error transferring the data to system memory" << std::endl;
+                continue;
             }
+            tmpFrame = swFrame;
+        }
+        else {
+            tmpFrame = hwFrame;
         }
 
         sws_scale(
             swsContext,
-            swFrame->data, swFrame->linesize,
+            tmpFrame->data, tmpFrame->linesize,
             0, height,
             pFrameRGB->data, pFrameRGB->linesize
         );
 
-        int numBytes = av_image_get_buffer_size(outputFormat, width, height, 1);
-        std::unique_ptr<uint8_t[]> buffer(new uint8_t[numBytes]);
-
-        memcpy(buffer.get(), pFrameRGB->data[0], numBytes);
+        memcpy(buffer, pFrameRGB->data[0], bufferSize);
 
         if (isRecOutputSet) {
-            processRecOutput(avPacket, swFrame);
+            processRecOutput(avPacket, tmpFrame);
         }
 
-        return { "", std::move(buffer) };
+        return { "", buffer };
     }
 
     return { "", nullptr };
@@ -515,9 +557,14 @@ void FFMpegHandler::closeConnection() {
             swFrame = nullptr;
         }
 
-        if (buffer) {
-            av_free(buffer);
-            buffer = nullptr;
+        if (hwFrame) {
+            av_frame_free(&hwFrame);
+            hwFrame = nullptr;
+        }
+
+        if (hwDeviceCtx) {
+            av_buffer_unref(&hwDeviceCtx);
+            hwDeviceCtx = nullptr;
         }
 
         if (swsContext) {
