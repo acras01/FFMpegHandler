@@ -35,5 +35,8 @@
     <ClCompile Include="FFMpegHandler.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="FFMpegHandlerJNI.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
