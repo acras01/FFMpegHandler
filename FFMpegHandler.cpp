@@ -50,6 +50,8 @@ std::string FFMpegHandler::connect(
     ConnectionCallback connectionCallback,
     FrameCallback frameCallback
 ) {
+    std::string result = "";
+
     try {
         SetUnhandledExceptionFilter(MyUnhandledExceptionFilter);
 
@@ -66,7 +68,7 @@ std::string FFMpegHandler::connect(
 
         std::cout << "Connecting..." << std::endl;
 
-        auto result = openInput();
+        result = openInput();
         if (!result.empty()) {
             return result;
         }
@@ -99,21 +101,22 @@ std::string FFMpegHandler::connect(
         std::cout << "Start frame processing..." << std::endl;
 
         result = processFrameLoop(frameCallback, width, height);
-
-        closeConnection();
-
-        return result;
     }
     catch (const std::exception& e) {
         std::cout << "Exception caught: " << e.what() << std::endl;
 
-        return e.what();
+
+        result = e.what();
     }
     catch (...) {
         std::cout << "Unknown error occurred" << std::endl;
 
-        return "Unknown error occurred";
+        result = "Unknown error occurred";
     }
+
+    closeConnection();
+
+    return result;
 }
 
 std::string FFMpegHandler::openInput() {
@@ -124,30 +127,12 @@ std::string FFMpegHandler::openInput() {
     }
     avFormatCtx->interrupt_callback = int_cb;
 
-    int ret = avformat_open_input(&avFormatCtx, sourceUrl, NULL, &options);
-    if (ret != 0) {
-        if (ret == AVERROR_EXIT) {
-            interrupt_flag.store(false);
-
-            std::cout << "Video source opening was interrupted" << std::endl;
-            return "";
-        }
-        else {
-            return "Couldn't open video source";
-        }
+    if (avformat_open_input(&avFormatCtx, sourceUrl, nullptr, &options) < 0) {
+        return "Couldn't open video source";
     }
 
-    ret = avformat_find_stream_info(avFormatCtx, NULL);
-    if (ret < 0) {
-        if (ret == AVERROR_EXIT) {
-            interrupt_flag.store(false);
-
-            std::cout << "Video source opening was interrupted" << std::endl;
-            return "";
-        }
-        else {
-            return "Couldn't find stream information";
-        }
+    if (avformat_find_stream_info(avFormatCtx, nullptr) < 0) {
+        return "Couldn't find stream information";
     }
 
     videoStreamIndex = findVideoStreamIndex();
@@ -179,7 +164,7 @@ std::string FFMpegHandler::configureDecoder(const int width, const int height) {
     avCodecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
     avCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 
-    if (avcodec_open2(avCodecCtx, avCodec, NULL) < 0) {
+    if (avcodec_open2(avCodecCtx, avCodec, nullptr) < 0) {
         return "Couldn't open codec";
     }
 
@@ -222,14 +207,14 @@ std::string FFMpegHandler::setupUdpOutput() {
     const char* FORMAT = "mpegts";
     const char* destination = outputUrl.c_str();
 
-    avformat_alloc_output_context2(&avOutputCtxUdp, NULL, FORMAT, destination);
+    avformat_alloc_output_context2(&avOutputCtxUdp, nullptr, FORMAT, destination);
     if (!avOutputCtxUdp) {
         return "Failed to allocate AVFormatContext for udp";
     }
 
     for (unsigned int i = 0; i < avFormatCtx->nb_streams; ++i) {
         AVStream* inStream = avFormatCtx->streams[i];
-        AVStream* outStream = avformat_new_stream(avOutputCtxUdp, NULL);
+        AVStream* outStream = avformat_new_stream(avOutputCtxUdp, nullptr);
         if (!outStream) {
             return "Failed to allocate output stream for udp";
         }
@@ -246,7 +231,7 @@ std::string FFMpegHandler::setupUdpOutput() {
         return "Couldn't open output context for udp";
     }
 
-    if (avformat_write_header(avOutputCtxUdp, NULL) < 0) {
+    if (avformat_write_header(avOutputCtxUdp, nullptr) < 0) {
         return "Failed to write output header for udp";
     }
 
@@ -262,7 +247,7 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
     const char* FORMAT = "matroska";
     const char* destination = recordFilePath.c_str();
 
-    if (avformat_alloc_output_context2(&avOutputCtxRec, NULL, FORMAT, destination) < 0) {
+    if (avformat_alloc_output_context2(&avOutputCtxRec, nullptr, FORMAT, destination) < 0) {
         return "Failed to allocate AVFormatContext for recording";
     }
 
@@ -318,7 +303,7 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
         av_opt_set(encoderContextRec->priv_data, "aq-strength", "0.8", 0); // Lower AQ strength to reduce file size
     }
 
-    if (avcodec_open2(encoderContextRec, codec, NULL) < 0) {
+    if (avcodec_open2(encoderContextRec, codec, nullptr) < 0) {
         return "Failed to open codec for recording";
     }
 
@@ -348,7 +333,7 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
         return "Couldn't open output context for recording";
     }
 
-    if (avformat_write_header(avOutputCtxRec, NULL) < 0) {
+    if (avformat_write_header(avOutputCtxRec, nullptr) < 0) {
         return "Failed to write output header for recording";
     }
 
@@ -370,86 +355,70 @@ std::string FFMpegHandler::processFrameLoop(FrameCallback callback, int width, i
 }
 
 ProcessResult FFMpegHandler::processFrames(const int width, const int height) {
-    try {
-        ProcessResult result = { "", NULL };
+    ProcessResult result = { "", nullptr };
 
-        if (av_read_frame(avFormatCtx, avPacket) >= 0) {
-            if (isUdpOutputSet) {
-                AVPacket* avPacketCopy = av_packet_alloc();
-                if (avPacketCopy) {
-                    if (av_packet_ref(avPacketCopy, avPacket) >= 0) {
-                        processUdpOutput(avPacketCopy);
-                    }
-                    av_packet_unref(avPacketCopy);
-                    av_packet_free(&avPacketCopy);
+    if (av_read_frame(avFormatCtx, avPacket) >= 0) {
+        if (isUdpOutputSet) {
+            AVPacket* avPacketCopy = av_packet_alloc();
+            if (avPacketCopy) {
+                if (av_packet_ref(avPacketCopy, avPacket) >= 0) {
+                    processUdpOutput(avPacketCopy);
                 }
+                av_packet_unref(avPacketCopy);
+                av_packet_free(&avPacketCopy);
             }
-
-            if (avPacket->stream_index == videoStreamIndex) {
-                result = processVideoFrame(width, height);
-            }
-            av_packet_unref(avPacket);
-
-            return result;
         }
-        else {
-            result.message = "Can't read frame";
-            return result;
+
+        if (avPacket->stream_index == videoStreamIndex) {
+            result = processVideoFrame(width, height);
         }
+        av_packet_unref(avPacket);
+
+        return result;
     }
-    catch (const std::bad_alloc& e) {
-        return { "Memory allocation failed", NULL };
-    }
-    catch (const std::exception& e) {
-        return { "Exception occurred", NULL };
+    else {
+        result.message = "Can't read frame";
+        return result;
     }
 }
 
 ProcessResult FFMpegHandler::processVideoFrame(const int width, const int height) {
-    try {
-        if (avcodec_send_packet(avCodecCtx, avPacket) < 0) {
-            return { "Failed to send AVPacket to decoder", NULL };
-        }
+    if (avcodec_send_packet(avCodecCtx, avPacket) < 0) {
+        return { "Failed to send AVPacket to decoder", nullptr };
+    }
 
-        while (avcodec_receive_frame(avCodecCtx, swFrame) >= 0) {
-            if (!swsContext) {
-                swsContext = sws_getContext(
-                    width, height, inputFormat,
-                    width, height, outputFormat,
-                    SWS_BILINEAR, NULL, NULL, NULL
-                );
-                if (!swsContext) {
-                    return { "Couldn't initialize SwsContext", NULL };
-                }
-            }
-
-            sws_scale(
-                swsContext,
-                swFrame->data, swFrame->linesize,
-                0, height,
-                pFrameRGB->data, pFrameRGB->linesize
+    while (avcodec_receive_frame(avCodecCtx, swFrame) >= 0) {
+        if (!swsContext) {
+            swsContext = sws_getContext(
+                width, height, inputFormat,
+                width, height, outputFormat,
+                SWS_BILINEAR, nullptr, nullptr, nullptr
             );
-
-            int numBytes = av_image_get_buffer_size(outputFormat, width, height, 1);
-            std::unique_ptr<uint8_t[]> buffer(new uint8_t[numBytes]);
-
-            memcpy(buffer.get(), pFrameRGB->data[0], numBytes);
-
-            if (isRecOutputSet) {
-                processRecOutput(avPacket, swFrame);
+            if (!swsContext) {
+                return { "Couldn't initialize SwsContext", nullptr };
             }
-
-            return { "", std::move(buffer) };
         }
 
-        return { "", NULL };
+        sws_scale(
+            swsContext,
+            swFrame->data, swFrame->linesize,
+            0, height,
+            pFrameRGB->data, pFrameRGB->linesize
+        );
+
+        int numBytes = av_image_get_buffer_size(outputFormat, width, height, 1);
+        std::unique_ptr<uint8_t[]> buffer(new uint8_t[numBytes]);
+
+        memcpy(buffer.get(), pFrameRGB->data[0], numBytes);
+
+        if (isRecOutputSet) {
+            processRecOutput(avPacket, swFrame);
+        }
+
+        return { "", std::move(buffer) };
     }
-    catch (const std::bad_alloc& e) {
-        return { "Memory allocation failed", NULL };
-    }
-    catch (const std::exception& e) {
-        return { "Exception occurred", NULL };
-    }
+
+    return { "", nullptr };
 }
 
 void FFMpegHandler::processUdpOutput(AVPacket* packet) {
@@ -495,8 +464,8 @@ void FFMpegHandler::processRecOutput(AVPacket* packet, AVFrame* frame) {
 void FFMpegHandler::disconnect() {
     std::cout << "Disconnecting" << std::endl;
 
+    interrupt_flag.store(true, std::memory_order_relaxed);
     isConnected = false;
-    interrupt_flag.store(true);
 }
 
 void FFMpegHandler::closeConnection() {
