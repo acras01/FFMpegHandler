@@ -1,0 +1,161 @@
+void FFMpegHandler::writeSubtitle(std::string text, int width, int height) {
+    AVSubtitle subtitle;
+    memset(&subtitle, 0, sizeof(AVSubtitle));
+
+    subtitle.format = 0;
+    subtitle.num_rects = 1;
+    subtitle.rects = (AVSubtitleRect**)av_mallocz(sizeof(AVSubtitleRect*));
+    subtitle.rects[0] = (AVSubtitleRect*)av_mallocz(sizeof(AVSubtitleRect));
+
+    AVSubtitleRect* rect = subtitle.rects[0];
+    rect->type = SUBTITLE_ASS;
+    rect->ass = av_strdup(text.c_str());
+
+    auto now = std::chrono::high_resolution_clock::now();
+    auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+
+    if (subtitleTimeStamp == 0)
+        subtitleTimeStamp = millis;
+
+    subtitle.pts = millis - subtitleTimeStamp;
+    subtitle.start_display_time = 0;
+    subtitle.end_display_time = 1;
+
+    int buf_size = 1024 * 1024;
+    uint8_t* buf = (uint8_t*)av_malloc(buf_size);
+    if (!buf) {
+        av_freep(&subtitle.rects[0]->ass);
+        av_freep(&subtitle.rects[0]);
+        av_freep(&subtitle.rects);
+        std::cout << "Could not allocate buffer" << std::endl;
+        return;
+    }
+
+    int encoded_size = avcodec_encode_subtitle(subtitleCtx, buf, buf_size, &subtitle);
+    if (encoded_size < 0) {
+        av_free(buf);
+        av_freep(&subtitle.rects[0]->ass);
+        av_freep(&subtitle.rects[0]);
+        av_freep(&subtitle.rects);
+        std::cout << "Failed to encode subtitle" << std::endl;
+        return;
+    }
+
+    AVPacket* pkt = av_packet_alloc();
+    if (av_packet_from_data(pkt, buf, encoded_size) < 0) {
+        av_free(buf);
+        av_packet_free(&pkt);
+        std::cout << "Error setting packet data" << std::endl;
+        return;
+    }
+    pkt->stream_index = subtitleStream->index;
+    pkt->pts = av_rescale_q(subtitle.pts, subtitleCtx->time_base, subtitleStream->time_base);
+    pkt->dts = pkt->pts;
+    pkt->duration = 1;
+    pkt->time_base = subtitleStream->time_base;
+
+    if (av_interleaved_write_frame(avOutputCtxRec, pkt) < 0) {
+        std::cout << "Error writing subtitle packet" << std::endl;
+    }
+
+    av_packet_unref(pkt);
+    av_packet_free(&pkt);
+    av_freep(&subtitle.rects[0]->ass);
+    av_freep(&subtitle.rects[0]);
+    av_freep(&subtitle.rects);
+}
+
+
+AVIOInterruptCB int_cb = { interrupt_callback, nullptr };
+inputSubtitleCtx = avformat_alloc_context();
+if (!inputSubtitleCtx) {
+    return "Couldn't create input sub AVFormatContext";
+}
+inputSubtitleCtx->interrupt_callback = int_cb;
+
+AVDictionary* _options = nullptr;
+av_dict_set(&_options, "timeout", "10000000", 0);
+av_dict_set(&_options, "fifo_size", "5000000", 0);
+av_dict_set(&_options, "overrun_nonfatal", "1", 0);
+if (avformat_open_input(&inputSubtitleCtx, "udp://0.0.0.0:8081", NULL, &_options) < 0) {
+    return "Could not open subtitle input";
+}
+av_dict_free(&_options);
+
+if (avformat_find_stream_info(inputSubtitleCtx, NULL) < 0) {
+    return "Could not find stream information for subtitle file";
+}
+
+for (int i = 0; i < inputSubtitleCtx->nb_streams; i++) {
+    AVStream* inStream = inputSubtitleCtx->streams[i];
+
+    if (inStream->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
+        AVStream* outStream = avformat_new_stream(avOutputCtxRec, NULL);
+        subStreamIndexRec = outStream->index;
+
+        if (!outStream) {
+            return "Could not allocate output stream";
+        }
+        if (avcodec_parameters_copy(outStream->codecpar, inStream->codecpar) < 0) {
+            return "Failed to copy codec parameters";
+        }
+    }
+}
+
+
+                const char* subtitleText = nullptr;
+        try {
+
+            std::cout << "Write subtitle called" << std::endl;
+            FFMpegHandler* handler = reinterpret_cast<FFMpegHandler*>(handlerPtr);
+
+            std::cout << "Write subtitle called" << std::endl;
+            if (!handler) {
+                std::cout << "Invalid pointer" << std::endl;
+                return;
+            }
+
+            std::cout << "Write subtitle called" << std::endl;
+
+            subtitleText = env->GetStringUTFChars(jSubtitleText, nullptr);
+
+            std::cout << "Write subtitle called" << std::endl;
+
+            handler->processSubtitle(subtitleText);
+
+            std::cout << "Write subtitle called" << std::endl;
+
+            env->ReleaseStringUTFChars(jSubtitleText, subtitleText);
+        }
+        catch (const std::exception& e) {
+            if (subtitleText) {
+                env->ReleaseStringUTFChars(jSubtitleText, subtitleText);
+            }
+
+            const char* errorMessage = e.what();
+            jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
+            env->ThrowNew(exceptionClass, errorMessage);
+        }
+        catch (...) {
+            if (subtitleText) {
+                env->ReleaseStringUTFChars(jSubtitleText, subtitleText);
+            }
+            jclass exceptionClass = env->FindClass("java/lang/RuntimeException");
+            env->ThrowNew(exceptionClass, "Unknown error occurred during writing subtitle");
+        }
+		
+		
+		    std::cout << "processSubtitle called 0" << std::endl;
+    if (!isSubtitleInitialized) {
+        isSubtitleProcessing = true;
+        subtitleThread = std::thread(&FFMpegHandler::processSubtitles, this);
+        isSubtitleInitialized = true;
+    }
+    {
+        std::lock_guard<std::mutex> lock(subtitleMutex);
+        subtitleQueue.push(srtText);
+
+        std::cout << "processSubtitle called 2" << std::endl;
+    }
+    subtitleCondVar.notify_one();
+    std::cout << "processSubtitle called 3" << std::endl;
