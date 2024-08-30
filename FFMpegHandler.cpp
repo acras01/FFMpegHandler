@@ -89,10 +89,6 @@ std::string FFMpegHandler::connect(
             result = setupRecordOutput(width, height, sourceFrameRate);
             if (!result.empty()) std::cout << result << std::endl;
             else std::cout << "Recording configured" << std::endl;
-
-            //result = setupSubInput();
-            //if (!result.empty()) std::cout << result << std::endl;
-            //else std::cout << "Sub input configured" << std::endl;
         }
 
         connectionCallback();
