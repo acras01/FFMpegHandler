@@ -63,8 +63,6 @@ private:
     bool isConnected = false;
     bool isUdpOutputSet = false;
     bool isRecOutputSet = false;
-    bool isSrtOutputSet = false;
-    bool isSrtInputSet = false;
     bool isClosing = false;
     bool isClosed = true;
     const char* sourceUrl;
@@ -99,7 +97,6 @@ private:
     AVCodecContext* encoderContextRec = nullptr;
     int64_t currentPtsRec = 0;
     int videoStreamIndexRec = -1;
-    int subStreamIndexRec = -1;
 
     std::string openInput();
     std::string configureDecoder(int width, int height);
