@@ -1,8 +1,6 @@
 #ifndef FFMPEGHANDLER_H
 #define FFMPEGHANDLER_H
 
-#include <jni.h>
-
 #include <map>
 #include <vector>
 #include <chrono>
@@ -27,9 +25,6 @@ struct ProcessResult {
     uint8_t* buffer;
 };
 
-using LogCallback = std::function<void(int, const char*)>;
-static LogCallback g_logCallback = nullptr;
-static jobject globalCallbackRef = nullptr;
 void ffmpeg_log_callback(void* ptr, int level, const char* fmt, va_list vl);
 int interrupt_callback(void* ctx);
 static std::function<AVPixelFormat(AVCodecContext*, const enum AVPixelFormat*)> globalGetFormatLambda;
@@ -118,31 +113,5 @@ private:
     int findVideoStreamIndex();
     void closeConnection();
 };
-
-// JNI function declarations
-extern "C" {
-    JNIEXPORT jlong JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_createHandler(JNIEnv* env, jobject obj);
-
-    JNIEXPORT void JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_destroyHandler(JNIEnv* env, jobject obj, jlong handlerPtr);
-    
-    JNIEXPORT jstring JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_connect(
-        JNIEnv* env,
-        jobject obj,
-        jlong handlerPtr,
-        jstring jSourceUrl,
-        jstring jOutputUrl,
-        jstring jRecordFilePath,
-        jint width,
-        jint height,
-        jint sourceFrameRate,
-        jobject optionsMap,
-        jobject connectionCallback,
-        jobject frameCallback
-    );
-
-    JNIEXPORT void JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_disconnect(JNIEnv* env, jobject obj, jlong handlerPtr);
-
-    JNIEXPORT void JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_setLogCallback(JNIEnv* env, jobject obj, jobject callback);
-}
 
 #endif // FFMPEGHANDLER_H

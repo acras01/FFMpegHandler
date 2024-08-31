@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "FFMpegHandler.h"
+#include "FFMpegHandlerJNI.h"
 
 std::atomic<bool> interrupt_flag(false);
 

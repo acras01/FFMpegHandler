@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "FFMpegHandlerJNI.h"
 #include "FFMpegHandler.h"
 
 extern "C" {
