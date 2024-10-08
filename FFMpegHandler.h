@@ -36,6 +36,7 @@ public:
     ~FFMpegHandler();
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
+    using SubsCallback = std::function<void(long time)>;
     using ConnectionCallback = std::function<void()>;
 
     static AVPixelFormat getFormatWrapper(AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
@@ -55,7 +56,8 @@ public:
         int sourceFrameRate,
         std::map<std::string, std::string> optionsMap,
         ConnectionCallback connectionCallback,
-        FrameCallback frameCallback
+        FrameCallback frameCallback,
+        SubsCallback subsCallback
     );
     void disconnect();
 
@@ -66,6 +68,7 @@ private:
     bool isClosing = false;
     bool isClosed = true;
     const char* sourceUrl;
+    std::string subSourceUrl;
     std::string outputUrl;
     std::string recordFilePath;
     AVCodecID avCodecId = AV_CODEC_ID_NONE;
@@ -103,10 +106,10 @@ private:
     std::string setupUdpOutput();
     void processUdpOutput(AVPacket* packet);
     std::string setupRecordOutput(int width, int height, int sourceFrameRate);
-    void processRecOutput(AVPacket* packet, AVFrame* frame);
-    std::string processFrameLoop(FrameCallback callback, int width, int height);
-    ProcessResult processFrames(int width, int height);
-    ProcessResult processVideoFrame(int width, int height);
+    void processRecOutput(SubsCallback subsCallback, AVPacket* packet, AVFrame* frame);
+    std::string processFrameLoop(FrameCallback callback, SubsCallback subsCallback, int width, int height);
+    ProcessResult processFrames(SubsCallback subsCallback, int width, int height);
+    ProcessResult processVideoFrame(SubsCallback subsCallback, int width, int height);
     int findVideoStreamIndex();
     void closeConnection();
 };

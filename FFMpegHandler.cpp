@@ -49,7 +49,8 @@ std::string FFMpegHandler::connect(
     int sourceFrameRate,
     std::map<std::string, std::string> optionsMap,
     ConnectionCallback connectionCallback,
-    FrameCallback frameCallback
+    FrameCallback frameCallback,
+    SubsCallback subsCallback
 ) {
     std::string result = "";
 
@@ -101,7 +102,7 @@ std::string FFMpegHandler::connect(
 
         std::cout << "Start frame processing..." << std::endl;
 
-        result = processFrameLoop(frameCallback, width, height);
+        result = processFrameLoop(frameCallback, subsCallback, width, height);
     }
     catch (const std::exception& e) {
         std::cout << "Exception caught: " << e.what() << std::endl;
@@ -387,9 +388,9 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
     return "";
 }
 
-std::string FFMpegHandler::processFrameLoop(FrameCallback callback, int width, int height) {
+std::string FFMpegHandler::processFrameLoop(FrameCallback callback, SubsCallback subsCallback, int width, int height) {
     while (isConnected) {
-        auto processResult = processFrames(width, height);
+        auto processResult = processFrames(subsCallback, width, height);
 
         if (processResult.message.empty() && processResult.buffer) {
             callback(processResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
@@ -399,7 +400,7 @@ std::string FFMpegHandler::processFrameLoop(FrameCallback callback, int width, i
     return "";
 }
 
-ProcessResult FFMpegHandler::processFrames(const int width, const int height) {
+ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, const int width, const int height) {
     ProcessResult result = { "", nullptr };
 
     if (av_read_frame(avFormatCtx, avPacket) >= 0) {
@@ -415,7 +416,7 @@ ProcessResult FFMpegHandler::processFrames(const int width, const int height) {
         }
 
         if (avPacket->stream_index == videoStreamIndex) {
-            result = processVideoFrame(width, height);
+            result = processVideoFrame(subsCallback, width, height);
         }
         av_packet_unref(avPacket);
 
@@ -427,7 +428,7 @@ ProcessResult FFMpegHandler::processFrames(const int width, const int height) {
     }
 }
 
-ProcessResult FFMpegHandler::processVideoFrame(const int width, const int height) {
+ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const int width, const int height) {
     if (avcodec_send_packet(avCodecCtx, avPacket) < 0) {
         return { "Failed to send AVPacket to decoder", nullptr };
     }
@@ -455,7 +456,7 @@ ProcessResult FFMpegHandler::processVideoFrame(const int width, const int height
         memcpy(buffer, pFrameRGB->data[0], bufferSize);
 
         if (isRecOutputSet) {
-            processRecOutput(avPacket, tmpFrame);
+            processRecOutput(subsCallback, avPacket, tmpFrame);
         }
 
         return { "", buffer };
@@ -481,7 +482,7 @@ void FFMpegHandler::processUdpOutput(AVPacket* packet) {
     }
 }
 
-void FFMpegHandler::processRecOutput(AVPacket* packet, AVFrame* frame) {
+void FFMpegHandler::processRecOutput(SubsCallback subsCallback, AVPacket* packet, AVFrame* frame) {
     if (avOutputCtxRec) {
         AVStream* inStream = avFormatCtx->streams[avPacket->stream_index];
 
@@ -498,6 +499,8 @@ void FFMpegHandler::processRecOutput(AVPacket* packet, AVFrame* frame) {
             currentPtsRec += duration;
 
             packet->pos = -1;
+
+            subsCallback(packet->pts);
 
             av_interleaved_write_frame(avOutputCtxRec, packet);
         }

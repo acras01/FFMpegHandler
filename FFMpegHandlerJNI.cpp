@@ -38,7 +38,8 @@ extern "C" {
         jint sourceFrameRate,
         jobject optionsMap,
         jobject connectionCallback,
-        jobject frameCallback
+        jobject frameCallback,
+        jobject subsCallback
     ) {
         try {
             FFMpegHandler* handler = reinterpret_cast<FFMpegHandler*>(handlerPtr);
@@ -99,7 +100,23 @@ extern "C" {
                 env->CallVoidMethod(connectionCallback, onConnectedMethod);
                 };
 
-            auto ret = handler->connect(sourceUrl, outputUrl, recordFilePath, width, height, sourceFrameRate, options, conCallback, frmCallback);
+            FFMpegHandler::SubsCallback subtCallback = [env, subsCallback](long time) {
+                jclass subsCallbackClass = env->GetObjectClass(subsCallback);
+                jmethodID onRecordMethod = env->GetMethodID(subsCallbackClass, "onRecord", "(J)V");
+                env->CallVoidMethod(subsCallback, onRecordMethod, time);
+                };
+
+            auto ret = handler->connect(sourceUrl,
+                outputUrl,
+                recordFilePath,
+                width,
+                height,
+                sourceFrameRate,
+                options,
+                conCallback,
+                frmCallback,
+                subtCallback
+            );
 
             std::cout << "Connection result: " << ret << std::endl;
 
