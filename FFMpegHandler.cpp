@@ -438,6 +438,18 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
         if (hwFrame->format == hwPixFmt) {
             if (av_hwframe_transfer_data(swFrame, hwFrame, 0) < 0) {
                 std::cout << "Error transferring the data to system memory" << std::endl;
+
+                av_frame_free(&hwFrame);
+                av_frame_free(&swFrame);
+
+                hwFrame = av_frame_alloc();
+                swFrame = av_frame_alloc();
+
+                if (!hwFrame || !swFrame) {
+                    std::cerr << "Error reallocating frames." << std::endl;
+                    return { "Frame allocation failed", nullptr };
+                }
+
                 continue;
             }
             tmpFrame = swFrame;
@@ -446,12 +458,14 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
             tmpFrame = hwFrame;
         }
 
-        sws_scale(
-            swsContext,
-            tmpFrame->data, tmpFrame->linesize,
-            0, height,
-            pFrameRGB->data, pFrameRGB->linesize
-        );
+        if (sws_scale(swsContext, tmpFrame->data, tmpFrame->linesize, 0, height, pFrameRGB->data, pFrameRGB->linesize) < 0) {
+            std::cerr << "Error during sws_scale operation." << std::endl;
+            av_frame_free(&hwFrame);
+            av_frame_free(&swFrame);
+            hwFrame = av_frame_alloc();
+            swFrame = av_frame_alloc();
+            return { "Error in sws_scale", nullptr };
+        }
 
         memcpy(buffer, pFrameRGB->data[0], bufferSize);
 
