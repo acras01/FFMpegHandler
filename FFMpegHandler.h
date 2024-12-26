@@ -36,6 +36,7 @@ public:
     ~FFMpegHandler();
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
+    using KlvCallback = std::function<void(const uint8_t* buffer, int size)>;
     using SubsCallback = std::function<void(long time)>;
     using ConnectionCallback = std::function<void()>;
 
@@ -57,7 +58,8 @@ public:
         std::map<std::string, std::string> optionsMap,
         ConnectionCallback connectionCallback,
         FrameCallback frameCallback,
-        SubsCallback subsCallback
+        SubsCallback subsCallback,
+        KlvCallback klvCallback
     );
     void disconnect();
 
@@ -82,6 +84,7 @@ private:
     int bufferSize = 0;
     uint8_t* buffer = nullptr;
     int videoStreamIndex = -1;
+    int klvStreamIndex = -1;
     const AVPixelFormat outputFormat = AV_PIX_FMT_BGR0;
     const AVPixelFormat inputFormat = AV_PIX_FMT_YUV420P;
 
@@ -107,10 +110,11 @@ private:
     void processUdpOutput(AVPacket* packet);
     std::string setupRecordOutput(int width, int height, int sourceFrameRate);
     void processRecOutput(SubsCallback subsCallback, AVPacket* packet, AVFrame* frame);
-    std::string processFrameLoop(FrameCallback callback, SubsCallback subsCallback, int width, int height);
-    ProcessResult processFrames(SubsCallback subsCallback, int width, int height);
+    std::string processFrameLoop(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
+    ProcessResult processFrames(SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
     ProcessResult processVideoFrame(SubsCallback subsCallback, int width, int height);
     int findVideoStreamIndex();
+    int findKlvStreamIndex();
     void closeConnection();
 };
 

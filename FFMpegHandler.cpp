@@ -50,7 +50,8 @@ std::string FFMpegHandler::connect(
     std::map<std::string, std::string> optionsMap,
     ConnectionCallback connectionCallback,
     FrameCallback frameCallback,
-    SubsCallback subsCallback
+    SubsCallback subsCallback,
+    KlvCallback klvCallback
 ) {
     std::string result = "";
 
@@ -102,7 +103,7 @@ std::string FFMpegHandler::connect(
 
         std::cout << "Start frame processing..." << std::endl;
 
-        result = processFrameLoop(frameCallback, subsCallback, width, height);
+        result = processFrameLoop(frameCallback, subsCallback, klvCallback, width, height);
     }
     catch (const std::exception& e) {
         std::cout << "Exception caught: " << e.what() << std::endl;
@@ -141,6 +142,8 @@ std::string FFMpegHandler::openInput() {
     if (videoStreamIndex < 0) {
         return "Couldn't find valid video stream inside file";
     }
+
+    klvStreamIndex = findKlvStreamIndex();
 
     return "";
 }
@@ -242,6 +245,16 @@ std::string FFMpegHandler::configureDecoder(const int width, const int height) {
 int FFMpegHandler::findVideoStreamIndex() {
     for (unsigned int i = 0; i < avFormatCtx->nb_streams; i++) {
         if (avFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int FFMpegHandler::findKlvStreamIndex() {
+    for (unsigned int i = 0; i < avFormatCtx->nb_streams; i++) {
+        if (avFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
             return i;
         }
     }
@@ -388,9 +401,9 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
     return "";
 }
 
-std::string FFMpegHandler::processFrameLoop(FrameCallback callback, SubsCallback subsCallback, int width, int height) {
+std::string FFMpegHandler::processFrameLoop(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height) {
     while (isConnected) {
-        auto processResult = processFrames(subsCallback, width, height);
+        auto processResult = processFrames(subsCallback, klvCallback, width, height);
 
         if (processResult.message.empty() && processResult.buffer) {
             callback(processResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
@@ -400,7 +413,7 @@ std::string FFMpegHandler::processFrameLoop(FrameCallback callback, SubsCallback
     return "";
 }
 
-ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, const int width, const int height) {
+ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, KlvCallback klvCallback, const int width, const int height) {
     ProcessResult result = { "", nullptr };
 
     if (av_read_frame(avFormatCtx, avPacket) >= 0) {
@@ -418,6 +431,12 @@ ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, const int 
         if (avPacket->stream_index == videoStreamIndex) {
             result = processVideoFrame(subsCallback, width, height);
         }
+        else if (avPacket->stream_index == klvStreamIndex) {
+            uint8_t* klvData = avPacket->data;
+            int klvSize = avPacket->size;
+            klvCallback(klvData, klvSize);
+        }
+
         av_packet_unref(avPacket);
 
         return result;

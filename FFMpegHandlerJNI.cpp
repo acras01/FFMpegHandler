@@ -39,7 +39,8 @@ extern "C" {
         jobject optionsMap,
         jobject connectionCallback,
         jobject frameCallback,
-        jobject subsCallback
+        jobject subsCallback,
+        jobject klvCallback
     ) {
         try {
             FFMpegHandler* handler = reinterpret_cast<FFMpegHandler*>(handlerPtr);
@@ -94,6 +95,17 @@ extern "C" {
                 env->DeleteLocalRef(frameData);
                 };
 
+            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](const uint8_t* buffer, int size) {
+                jbyteArray klvData = env->NewByteArray(size);
+                env->SetByteArrayRegion(klvData, 0, size, reinterpret_cast<const jbyte*>(buffer));
+
+                jclass klvCallbackClass = env->GetObjectClass(klvCallback);
+                jmethodID onFrameMethod = env->GetMethodID(klvCallbackClass, "onFrame", "([B)V");
+                env->CallVoidMethod(klvCallback, onFrameMethod, klvData);
+
+                env->DeleteLocalRef(klvData);
+                };
+
             FFMpegHandler::ConnectionCallback conCallback = [env, connectionCallback]() {
                 jclass connectionCallbackClass = env->GetObjectClass(connectionCallback);
                 jmethodID onConnectedMethod = env->GetMethodID(connectionCallbackClass, "onConnected", "()V");
@@ -115,7 +127,8 @@ extern "C" {
                 options,
                 conCallback,
                 frmCallback,
-                subtCallback
+                subtCallback,
+                dataCallback
             );
 
             std::cout << "Connection result: " << ret << std::endl;

@@ -29,7 +29,8 @@ extern "C" {
         jobject optionsMap,
         jobject connectionCallback,
         jobject frameCallback,
-        jobject subsCallback
+        jobject subsCallback,
+        jobject klvCallback
     );
 
     JNIEXPORT void JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_disconnect(JNIEnv* env, jobject obj, jlong handlerPtr);
