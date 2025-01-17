@@ -2,6 +2,8 @@
 #include "FFMpegHandlerJNI.h"
 #include "FFMpegHandler.h"
 
+#include <stdio.h>
+
 extern "C" {
 
     JNIEXPORT jlong JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_createHandler(JNIEnv* env, jobject obj) {
@@ -95,15 +97,47 @@ extern "C" {
                 env->DeleteLocalRef(frameData);
                 };
 
-            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](const uint8_t* buffer, int size) {
-                jbyteArray klvData = env->NewByteArray(size);
-                env->SetByteArrayRegion(klvData, 0, size, reinterpret_cast<const jbyte*>(buffer));
+            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](std::unique_ptr<KLVMap> klvMap) {
+                // Create a new Java HashMap
+                jclass hashMapClass = env->FindClass("java/util/HashMap");
+                jmethodID hashMapInit = env->GetMethodID(hashMapClass, "<init>", "()V");
+                jobject hashMap = env->NewObject(hashMapClass, hashMapInit);
 
+                // Get the put method of HashMap
+                jmethodID putMethod = env->GetMethodID(hashMapClass, "put",
+                    "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+
+                // Iterate through KLVMap and populate the Java HashMap
+                for (int i = 0; i < 94; i++) {
+                    if (klvMap->KLVs[i]) {
+                        // Convert the tag to a Java Integer
+                        jobject javaKey = env->NewObject(env->FindClass("java/lang/Integer"),
+                            env->GetMethodID(env->FindClass("java/lang/Integer"), "<init>", "(I)V"),
+                            klvMap->KLVs[i]->tag);
+
+                        // Convert the value to a Java String
+                        char* cStrValue = genericValueToString(&(klvMap->KLVs[i]->value));
+                        std::string valueStr = cStrValue; // Convert to std::string
+                        free(cStrValue); // Free the allocated memory after use
+
+                        jstring javaValue = env->NewStringUTF(valueStr.c_str());
+
+                        // Add the key-value pair to the HashMap
+                        env->CallObjectMethod(hashMap, putMethod, javaKey, javaValue);
+
+                        // Clean up local references
+                        env->DeleteLocalRef(javaKey);
+                        env->DeleteLocalRef(javaValue);
+                    }
+                }
+
+                // Call the Java callback with the HashMap
                 jclass klvCallbackClass = env->GetObjectClass(klvCallback);
-                jmethodID onFrameMethod = env->GetMethodID(klvCallbackClass, "onFrame", "([B)V");
-                env->CallVoidMethod(klvCallback, onFrameMethod, klvData);
+                jmethodID onFrameMethod = env->GetMethodID(klvCallbackClass, "onKlvTag", "(Ljava/util/HashMap;)V");
+                env->CallVoidMethod(klvCallback, onFrameMethod, hashMap);
 
-                env->DeleteLocalRef(klvData);
+                // Clean up local reference for the HashMap
+                env->DeleteLocalRef(hashMap);
                 };
 
             FFMpegHandler::ConnectionCallback conCallback = [env, connectionCallback]() {
@@ -206,4 +240,51 @@ extern "C" {
 
         std::cout << "Log callback set" << std::endl;
     }
+
+    char* genericValueToString(struct GenericValue* value) {
+        char buffer[128];
+        char* result = NULL;
+
+        switch (value->type) {
+        case F_UINT8:
+            snprintf(buffer, sizeof(buffer), "%u", value->uint8_value);
+            break;
+        case F_UINT16:
+            snprintf(buffer, sizeof(buffer), "%u", value->uint16_value);
+            break;
+        case F_UINT32:
+            snprintf(buffer, sizeof(buffer), "%u", value->uint32_value);
+            break;
+        case F_UINT64:
+            snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value->uint64_value);
+            break;
+        case F_INT8:
+            snprintf(buffer, sizeof(buffer), "%d", value->int8_value);
+            break;
+        case F_INT16:
+            snprintf(buffer, sizeof(buffer), "%d", value->int16_value);
+            break;
+        case F_INT32:
+            snprintf(buffer, sizeof(buffer), "%d", value->int32_value);
+            break;
+        case F_INT64:
+            snprintf(buffer, sizeof(buffer), "%lld", (long long)value->int64_value);
+            break;
+        case F_FLOAT:
+            snprintf(buffer, sizeof(buffer), "%f", value->float_value);
+            break;
+        case F_DOUBLE:
+            snprintf(buffer, sizeof(buffer), "%lf", value->double_value);
+            break;
+        case F_CHAR_P:
+            return _strdup(value->charp_value ? value->charp_value : "(null)");
+        default:
+            return _strdup("(unknown type)");
+        }
+
+        // Duplicate the result string and return
+        result = _strdup(buffer);
+        return result;
+    }
+
 }
