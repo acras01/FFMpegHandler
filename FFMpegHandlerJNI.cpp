@@ -97,7 +97,7 @@ extern "C" {
                 env->DeleteLocalRef(frameData);
                 };
 
-            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](std::unique_ptr<KLVMap> klvMap) {
+            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](std::unique_ptr<KLVRawMap> klvMap) {
                 // Create a new Java HashMap
                 jclass hashMapClass = env->FindClass("java/util/HashMap");
                 jmethodID hashMapInit = env->GetMethodID(hashMapClass, "<init>", "()V");
@@ -110,17 +110,13 @@ extern "C" {
                 // Iterate through KLVMap and populate the Java HashMap
                 for (int i = 0; i < 94; i++) {
                     if (klvMap->KLVs[i]) {
-                        // Convert the tag to a Java Integer
                         jobject javaKey = env->NewObject(env->FindClass("java/lang/Integer"),
                             env->GetMethodID(env->FindClass("java/lang/Integer"), "<init>", "(I)V"),
                             klvMap->KLVs[i]->tag);
 
-                        // Convert the value to a Java String
-                        char* cStrValue = genericValueToString(&(klvMap->KLVs[i]->value));
-                        std::string valueStr = cStrValue; // Convert to std::string
-                        free(cStrValue); // Free the allocated memory after use
-
-                        jstring javaValue = env->NewStringUTF(valueStr.c_str());
+                        // Create a Java ByteArray from rawBytes
+                        jbyteArray javaValue = env->NewByteArray(klvMap->KLVs[i]->rawSize);
+                        env->SetByteArrayRegion(javaValue, 0, klvMap->KLVs[i]->rawSize, reinterpret_cast<jbyte*>(klvMap->KLVs[i]->rawBytes));
 
                         // Add the key-value pair to the HashMap
                         env->CallObjectMethod(hashMap, putMethod, javaKey, javaValue);
@@ -239,52 +235,6 @@ extern "C" {
         av_log_set_callback(ffmpeg_log_callback);
 
         std::cout << "Log callback set" << std::endl;
-    }
-
-    char* genericValueToString(struct GenericValue* value) {
-        char buffer[128];
-        char* result = NULL;
-
-        switch (value->type) {
-        case F_UINT8:
-            snprintf(buffer, sizeof(buffer), "%u", value->uint8_value);
-            break;
-        case F_UINT16:
-            snprintf(buffer, sizeof(buffer), "%u", value->uint16_value);
-            break;
-        case F_UINT32:
-            snprintf(buffer, sizeof(buffer), "%u", value->uint32_value);
-            break;
-        case F_UINT64:
-            snprintf(buffer, sizeof(buffer), "%llu", (unsigned long long)value->uint64_value);
-            break;
-        case F_INT8:
-            snprintf(buffer, sizeof(buffer), "%d", value->int8_value);
-            break;
-        case F_INT16:
-            snprintf(buffer, sizeof(buffer), "%d", value->int16_value);
-            break;
-        case F_INT32:
-            snprintf(buffer, sizeof(buffer), "%d", value->int32_value);
-            break;
-        case F_INT64:
-            snprintf(buffer, sizeof(buffer), "%lld", (long long)value->int64_value);
-            break;
-        case F_FLOAT:
-            snprintf(buffer, sizeof(buffer), "%f", value->float_value);
-            break;
-        case F_DOUBLE:
-            snprintf(buffer, sizeof(buffer), "%lf", value->double_value);
-            break;
-        case F_CHAR_P:
-            return _strdup(value->charp_value ? value->charp_value : "(null)");
-        default:
-            return _strdup("(unknown type)");
-        }
-
-        // Duplicate the result string and return
-        result = _strdup(buffer);
-        return result;
     }
 
 }

@@ -37,7 +37,6 @@ extern "C" {
 
     JNIEXPORT void JNICALL Java_aero_swarmly_gcs_library_streamer_video_ffmpeg_FFMpegHandler_setLogCallback(JNIEnv* env, jobject obj, jobject callback);
 
-    char* genericValueToString(struct GenericValue* value); 
 }
 
 #endif // FFMPEGHANDLERJNI_H

@@ -15,12 +15,6 @@
 /**
  *  KLV structure
  */
-struct KLV {
-  enum Tags tag;
-  size_t size;
-  struct GenericValue value;
-};
-
 struct KLVRaw {
     enum Tags tag;
     uint8_t* rawBytes;
@@ -30,10 +24,6 @@ struct KLVRaw {
 /**
  *  Map structure to retrieve KLV
  */
-struct KLVMap {
-  struct KLV *KLVs[94];
-};
-
 struct KLVRawMap {
     struct KLVRaw* KLVs[94];
 };
@@ -53,11 +43,8 @@ struct KLVRawMap {
  *  Thus, freeing `data` also free `data` inside KLVs.
  *  Despite this fact, you need to free the KLV struct inside the map.
  */
-int unpack_misb(unsigned char *data, size_t size, struct KLVMap *klvmap);
 int unpack_misb_raw(unsigned char *data, size_t size, struct KLVRawMap *klvmap);
 
-struct KLV* get_klv_by_tag(const struct KLVMap* klvmap, int tag);
-
-void free_klvmap(struct KLVMap* klvmap);
+struct KLV* get_klv_by_tag(const struct KLVRawMap* klvmap, int tag);
 
 #endif /* !UNPACK_H */

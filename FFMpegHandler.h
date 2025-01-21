@@ -37,7 +37,7 @@ public:
     ~FFMpegHandler();
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
-    using KlvCallback = std::function<void(std::unique_ptr<KLVMap>)>;
+    using KlvCallback = std::function<void(std::unique_ptr<KLVRawMap>)>;
     using SubsCallback = std::function<void(long time)>;
     using ConnectionCallback = std::function<void()>;
 

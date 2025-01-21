@@ -324,7 +324,8 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
         encoderContextRec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
     }
 
-    encoderContextRec->thread_count = std::thread::hardware_concurrency() + 1;
+    int max_threads = std::thread::hardware_concurrency();
+    encoderContextRec->thread_count = std::min<int>(max_threads, 8);
     encoderContextRec->gop_size = 25;
     encoderContextRec->framerate = frameRate;
     encoderContextRec->time_base = av_inv_q(frameRate);
@@ -343,7 +344,7 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
         av_opt_set(encoderContextRec->priv_data, "crf", "23", 0);
         av_opt_set_int(encoderContextRec->priv_data, "bufsize", 2000, 0);
         av_opt_set_int(encoderContextRec->priv_data, "keyint", 30, 0);
-        av_opt_set_int(encoderContextRec->priv_data, "g", 1, 0);
+        av_opt_set_int(encoderContextRec->priv_data, "g", 30, 0);
     }
     else {
         // x265-specific settings
@@ -434,8 +435,8 @@ ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, KlvCallbac
         else if (avPacket->stream_index == klvStreamIndex) {
             uint8_t* klvData = avPacket->data;
             int klvSize = avPacket->size;
-            std::unique_ptr<KLVMap> klvmap = std::make_unique<KLVMap>();
-            if (unpack_misb(klvData, klvSize, klvmap.get()) > 0)
+            std::unique_ptr<KLVRawMap> klvmap = std::make_unique<KLVRawMap>();
+            if (unpack_misb_raw(klvData, klvSize, klvmap.get()) > 0)
                 klvCallback(std::move(klvmap));
         }
 
