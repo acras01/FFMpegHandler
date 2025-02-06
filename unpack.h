@@ -45,6 +45,6 @@ struct KLVRawMap {
  */
 int unpack_misb_raw(unsigned char *data, size_t size, struct KLVRawMap *klvmap);
 
-struct KLV* get_klv_by_tag(const struct KLVRawMap* klvmap, int tag);
+struct KLVRaw* get_klv_by_tag(const struct KLVRawMap* klvmap, int tag);
 
 #endif /* !UNPACK_H */

@@ -89,7 +89,7 @@ std::string FFMpegHandler::connect(
             std::cout << "UDP output configured" << std::endl;
         }
 
-        if (!recordFilePath.empty()) {
+        if (!recordFilePath.empty() && videoStreamIndex > -1) {
             this->recordFilePath = recordFilePath;
             result = setupRecordOutput(width, height, sourceFrameRate);
             if (!result.empty()) std::cout << result << std::endl;
@@ -303,7 +303,19 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
     frameRate = av_make_q(sourceFrameRate, 1);
     AVPixelFormat pixelFormat = AV_PIX_FMT_YUV420P;
 
-    const char* FORMAT = "matroska";
+    std::string extension = recordFilePath.substr(recordFilePath.find_last_of(".") + 1);
+    const char* FORMAT;
+
+    if (extension == "ts") {
+        FORMAT = "mpegts";
+    }
+    else if (extension == "mkv") {
+        FORMAT = "matroska";
+    }
+    else {
+        return "Unsupported file format: " + extension;
+    }
+
     const char* destination = recordFilePath.c_str();
 
     if (avformat_alloc_output_context2(&avOutputCtxRec, nullptr, FORMAT, destination) < 0) {
@@ -389,6 +401,21 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
 
     videoStreamIndexRec = outStream->index;
 
+    if (FORMAT == "mpegts" && klvStreamIndex > 0) {
+        AVStream* klvStream = avformat_new_stream(avOutputCtxRec, nullptr);
+        if (klvStream) {
+            klvStream->id = avOutputCtxRec->nb_streams - 1;
+            klvStream->codecpar->codec_type = AVMEDIA_TYPE_DATA;
+            klvStream->codecpar->codec_id = AV_CODEC_ID_SMPTE_KLV;
+            klvStream->time_base = AVRational(1, 1000);
+            klvStream->codecpar->codec_tag = MKTAG('K', 'L', 'V', ' ');
+            klvStreamIndexRec = klvStream->index;
+        }
+        else {
+            std::cerr << "Failed to allocate KLV data stream for recording" << std::endl;
+        }
+    }
+
     if (avio_open(&avOutputCtxRec->pb, destination, AVIO_FLAG_WRITE) < 0) {
         return "Couldn't open output context for recording";
     }
@@ -438,6 +465,8 @@ ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, KlvCallbac
             std::unique_ptr<KLVRawMap> klvmap = std::make_unique<KLVRawMap>();
             if (unpack_misb_raw(klvData, klvSize, klvmap.get()) > 0)
                 klvCallback(std::move(klvmap));
+
+            processRecDataOutput(avPacket);
         }
 
         av_packet_unref(avPacket);
@@ -492,7 +521,7 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
         memcpy(buffer, pFrameRGB->data[0], bufferSize);
 
         if (isRecOutputSet) {
-            processRecOutput(subsCallback, avPacket, tmpFrame);
+            processRecVideoOutput(subsCallback, avPacket);
         }
 
         return { "", buffer };
@@ -518,28 +547,53 @@ void FFMpegHandler::processUdpOutput(AVPacket* packet) {
     }
 }
 
-void FFMpegHandler::processRecOutput(SubsCallback subsCallback, AVPacket* packet, AVFrame* frame) {
-    if (avOutputCtxRec) {
-        AVStream* inStream = avFormatCtx->streams[avPacket->stream_index];
+void FFMpegHandler::processRecVideoOutput(SubsCallback subsCallback, AVPacket* packet) {
+    if (!avOutputCtxRec || !packet) return;
 
-        if (inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            AVStream* outStream = avOutputCtxRec->streams[videoStreamIndexRec];
+    AVStream* inStream = avFormatCtx->streams[packet->stream_index];
 
-            packet->stream_index = videoStreamIndexRec;
+    if (inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+        AVStream* outStream = avOutputCtxRec->streams[videoStreamIndexRec];
 
-            packet->pts = currentPtsRec;
-            packet->dts = packet->pts;
+        packet->stream_index = videoStreamIndexRec;
 
-            int64_t duration = static_cast<int64_t>(av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1);
-            packet->duration = duration;
-            currentPtsRec += duration;
+        packet->pts = currentPtsRec;
+        packet->dts = packet->pts;
 
-            packet->pos = -1;
+        int64_t duration = static_cast<int64_t>(av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1);
+        packet->duration = duration;
+        currentPtsRec += duration;
 
-            subsCallback(packet->pts);
+        packet->pos = -1;
 
-            av_interleaved_write_frame(avOutputCtxRec, packet);
-        }
+        subsCallback(packet->pts);
+
+        av_interleaved_write_frame(avOutputCtxRec, packet);
+    }
+
+}
+
+void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
+    if (!avOutputCtxRec || !avFormatCtx) return;
+
+    if (!packet || !packet->data || packet->size <= 0) {
+        std::cerr << "Error: Packet data is invalid or has been freed!" << std::endl;
+        return;
+    }
+
+    AVStream* inStream = avFormatCtx->streams[packet->stream_index];
+
+    if (inStream->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
+        AVStream* outStream = avOutputCtxRec->streams[klvStreamIndexRec];
+
+        packet->stream_index = klvStreamIndexRec;
+
+        packet->pts = av_rescale_q(packet->pts, avFormatCtx->streams[videoStreamIndexRec]->time_base, outStream->time_base);
+        packet->dts = packet->pts;
+
+        packet->pos = -1;
+
+        av_interleaved_write_frame(avOutputCtxRec, packet);
     }
 }
 

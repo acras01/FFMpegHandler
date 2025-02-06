@@ -104,13 +104,15 @@ private:
     AVCodecContext* encoderContextRec = nullptr;
     int64_t currentPtsRec = 0;
     int videoStreamIndexRec = -1;
+    int klvStreamIndexRec = -1;
 
     std::string openInput();
     std::string configureDecoder(int width, int height);
     std::string setupUdpOutput();
     void processUdpOutput(AVPacket* packet);
     std::string setupRecordOutput(int width, int height, int sourceFrameRate);
-    void processRecOutput(SubsCallback subsCallback, AVPacket* packet, AVFrame* frame);
+    void processRecVideoOutput(SubsCallback subsCallback, AVPacket* packet);
+    void processRecDataOutput(AVPacket* packet);
     std::string processFrameLoop(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
     ProcessResult processFrames(SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
     ProcessResult processVideoFrame(SubsCallback subsCallback, int width, int height);
