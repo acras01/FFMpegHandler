@@ -97,43 +97,15 @@ extern "C" {
                 env->DeleteLocalRef(frameData);
                 };
 
-            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](std::unique_ptr<KLVRawMap> klvMap) {
-                // Create a new Java HashMap
-                jclass hashMapClass = env->FindClass("java/util/HashMap");
-                jmethodID hashMapInit = env->GetMethodID(hashMapClass, "<init>", "()V");
-                jobject hashMap = env->NewObject(hashMapClass, hashMapInit);
+            FFMpegHandler::KlvCallback dataCallback = [env, klvCallback](const uint8_t* buffer, int size) {
+                jbyteArray klvData = env->NewByteArray(size);
+                env->SetByteArrayRegion(klvData, 0, size, reinterpret_cast<const jbyte*>(buffer));
 
-                // Get the put method of HashMap
-                jmethodID putMethod = env->GetMethodID(hashMapClass, "put",
-                    "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-
-                // Iterate through KLVMap and populate the Java HashMap
-                for (int i = 0; i < 94; i++) {
-                    if (klvMap->KLVs[i]) {
-                        jobject javaKey = env->NewObject(env->FindClass("java/lang/Integer"),
-                            env->GetMethodID(env->FindClass("java/lang/Integer"), "<init>", "(I)V"),
-                            klvMap->KLVs[i]->tag);
-
-                        // Create a Java ByteArray from rawBytes
-                        jbyteArray javaValue = env->NewByteArray(klvMap->KLVs[i]->rawSize);
-                        env->SetByteArrayRegion(javaValue, 0, klvMap->KLVs[i]->rawSize, reinterpret_cast<jbyte*>(klvMap->KLVs[i]->rawBytes));
-
-                        // Add the key-value pair to the HashMap
-                        env->CallObjectMethod(hashMap, putMethod, javaKey, javaValue);
-
-                        // Clean up local references
-                        env->DeleteLocalRef(javaKey);
-                        env->DeleteLocalRef(javaValue);
-                    }
-                }
-
-                // Call the Java callback with the HashMap
                 jclass klvCallbackClass = env->GetObjectClass(klvCallback);
-                jmethodID onFrameMethod = env->GetMethodID(klvCallbackClass, "onKlvTag", "(Ljava/util/HashMap;)V");
-                env->CallVoidMethod(klvCallback, onFrameMethod, hashMap);
+                jmethodID onFrameMethod = env->GetMethodID(klvCallbackClass, "onKlvTag", "([B)V");
+                env->CallVoidMethod(klvCallback, onFrameMethod, klvData);
 
-                // Clean up local reference for the HashMap
-                env->DeleteLocalRef(hashMap);
+                env->DeleteLocalRef(klvData);
                 };
 
             FFMpegHandler::ConnectionCallback conCallback = [env, connectionCallback]() {

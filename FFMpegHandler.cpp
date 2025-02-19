@@ -462,9 +462,8 @@ ProcessResult FFMpegHandler::processFrames(SubsCallback subsCallback, KlvCallbac
         else if (avPacket->stream_index == klvStreamIndex) {
             uint8_t* klvData = avPacket->data;
             int klvSize = avPacket->size;
-            std::unique_ptr<KLVRawMap> klvmap = std::make_unique<KLVRawMap>();
-            if (unpack_misb_raw(klvData, klvSize, klvmap.get()) > 0)
-                klvCallback(std::move(klvmap));
+            if (klvData && klvSize > 0)
+                klvCallback(klvData, klvSize);
 
             processRecDataOutput(avPacket);
         }
