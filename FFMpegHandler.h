@@ -112,8 +112,7 @@ private:
     std::string setupRecordOutput(int width, int height, int sourceFrameRate);
     void processRecVideoOutput(SubsCallback subsCallback, AVPacket* packet);
     void processRecDataOutput(AVPacket* packet);
-    std::string processFrameLoop(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
-    ProcessResult processFrames(SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
+    std::string processFrames(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
     ProcessResult processVideoFrame(SubsCallback subsCallback, int width, int height);
     int findVideoStreamIndex();
     int findKlvStreamIndex();
