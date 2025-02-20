@@ -133,7 +133,8 @@ extern "C" {
                 dataCallback
             );
 
-            std::cout << "Connection result: " << ret << std::endl;
+            if (!ret.empty())
+                std::cout << "Connection result: " << ret << std::endl;
 
             env->ReleaseStringUTFChars(jSourceUrl, sourceUrl);
             env->ReleaseStringUTFChars(jRecordFilePath, recordFilePath);

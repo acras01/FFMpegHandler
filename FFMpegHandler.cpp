@@ -430,42 +430,45 @@ std::string FFMpegHandler::setupRecordOutput(int width, int height, int sourceFr
 }
 
 std::string FFMpegHandler::processFrames(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, const int width, const int height) {
+    char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+
     while (isConnected) {
-        if (av_read_frame(avFormatCtx, avPacket) >= 0) {
-            if (isUdpOutputSet) {
-                AVPacket* avPacketCopy = av_packet_alloc();
-                if (avPacketCopy) {
-                    if (av_packet_ref(avPacketCopy, avPacket) >= 0) {
-                        processUdpOutput(avPacketCopy);
-                    }
-                    av_packet_unref(avPacketCopy);
-                    av_packet_free(&avPacketCopy);
-                }
-            }
-
-            if (avPacket->stream_index == videoStreamIndex) {
-                ProcessResult pResult = processVideoFrame(subsCallback, width, height);
-                if (pResult.message.empty() && pResult.buffer) {
-                    callback(pResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
-                }
-                else {
-                    std::cerr << "Error processing frame: " << pResult.message << std::endl;
-                }
-            }
-            else if (avPacket->stream_index == klvStreamIndex) {
-                uint8_t* klvData = avPacket->data;
-                int klvSize = avPacket->size;
-                if (klvData && klvSize > 0)
-                    klvCallback(klvData, klvSize);
-
-                processRecDataOutput(avPacket);
-            }
-
-            av_packet_unref(avPacket);
+        int ret = av_read_frame(avFormatCtx, avPacket);
+        if (ret < 0) {
+            av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
+            std::cerr << "Failed to read frame from source: " << errBuf << std::endl;
+            continue;
         }
-        else {
-            std::cerr << "Can't read frame" << std::endl;
+        if (isUdpOutputSet) {
+            AVPacket* avPacketCopy = av_packet_alloc();
+            if (avPacketCopy) {
+                if (av_packet_ref(avPacketCopy, avPacket) >= 0) {
+                    processUdpOutput(avPacketCopy);
+                }
+                av_packet_unref(avPacketCopy);
+                av_packet_free(&avPacketCopy);
+            }
         }
+
+        if (avPacket->stream_index == videoStreamIndex) {
+            ProcessResult pResult = processVideoFrame(subsCallback, width, height);
+            if (pResult.message.empty() && pResult.buffer) {
+                callback(pResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
+            }
+            else {
+                std::cerr << "Error processing frame: " << pResult.message << std::endl;
+            }
+        }
+        else if (avPacket->stream_index == klvStreamIndex) {
+            uint8_t* klvData = avPacket->data;
+            int klvSize = avPacket->size;
+            if (klvData && klvSize > 0)
+                klvCallback(klvData, klvSize);
+
+            processRecDataOutput(avPacket);
+        }
+
+        av_packet_unref(avPacket);
     }
 
     return "";
@@ -480,7 +483,7 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
         return { std::string("Failed to send AVPacket to decoder: ") + errBuf, nullptr };
     }
 
-    while ((ret = avcodec_receive_frame(avCodecCtx, hwFrame)) >= 0) {
+    while ((ret = avcodec_receive_frame(avCodecCtx, hwFrame)) == 0) {
         AVFrame* tmpFrame;
         if (hwFrame->format == hwPixFmt) {
             ret = av_hwframe_transfer_data(swFrame, hwFrame, 0);
@@ -488,15 +491,8 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
                 av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
                 std::cerr << "Error transferring the data to system memory: " << errBuf << std::endl;
 
-                av_frame_free(&hwFrame);
-                av_frame_free(&swFrame);
-
-                hwFrame = av_frame_alloc();
-                swFrame = av_frame_alloc();
-
-                if (!hwFrame || !swFrame) {
-                    return { "Frame allocation failed", nullptr };
-                }
+                av_frame_unref(hwFrame);
+                av_frame_unref(swFrame);
 
                 continue;
             }
@@ -509,10 +505,8 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
         ret = sws_scale(swsContext, tmpFrame->data, tmpFrame->linesize, 0, height, pFrameRGB->data, pFrameRGB->linesize);
         if (ret < 0) {
             av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-            av_frame_free(&hwFrame);
-            av_frame_free(&swFrame);
-            hwFrame = av_frame_alloc();
-            swFrame = av_frame_alloc();
+            av_frame_unref(hwFrame);
+            av_frame_unref(swFrame);
             return { errBuf, nullptr };
         }
 
@@ -599,7 +593,7 @@ void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
 void FFMpegHandler::disconnect() {
     std::cout << "Disconnecting" << std::endl;
 
-    interrupt_flag.store(true, std::memory_order_relaxed);
+    interrupt_flag.store(true, std::memory_order_release);
     isConnected = false;
 }
 
