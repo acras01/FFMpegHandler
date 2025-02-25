@@ -104,6 +104,8 @@ private:
     int64_t currentPtsRec = 0;
     int videoStreamIndexRec = -1;
     int klvStreamIndexRec = -1;
+    int64_t lastPTS = AV_NOPTS_VALUE;
+    int64_t lastDTS = AV_NOPTS_VALUE;
 
     std::string openInput();
     std::string configureDecoder(int width, int height);

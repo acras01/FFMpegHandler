@@ -543,27 +543,27 @@ void FFMpegHandler::processUdpOutput(AVPacket* packet) {
 void FFMpegHandler::processRecVideoOutput(SubsCallback subsCallback, AVPacket* packet) {
     if (!avOutputCtxRec || !packet) return;
 
-    AVStream* inStream = avFormatCtx->streams[packet->stream_index];
+    AVStream* outStream = avOutputCtxRec->streams[videoStreamIndexRec];
 
-    if (inStream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-        AVStream* outStream = avOutputCtxRec->streams[videoStreamIndexRec];
+    packet->stream_index = videoStreamIndexRec;
 
-        packet->stream_index = videoStreamIndexRec;
+    packet->pts = currentPtsRec;
+    packet->dts = packet->pts;
 
-        packet->pts = currentPtsRec;
-        packet->dts = packet->pts;
+    int64_t duration = static_cast<int64_t>(av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1);
+    packet->duration = duration;
+    currentPtsRec += duration;
 
-        int64_t duration = static_cast<int64_t>(av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1);
-        packet->duration = duration;
-        currentPtsRec += duration;
+    packet->pos = -1;
 
-        packet->pos = -1;
+    subsCallback(packet->pts);
 
-        subsCallback(packet->pts);
-
-        av_interleaved_write_frame(avOutputCtxRec, packet);
+    int ret = av_interleaved_write_frame(avOutputCtxRec, packet);
+    if (ret < 0) {
+        char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "Error writing video frame: " << errBuf << std::endl;
     }
-
 }
 
 void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
@@ -574,19 +574,31 @@ void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
         return;
     }
 
-    AVStream* inStream = avFormatCtx->streams[packet->stream_index];
+    AVStream* inStream = avFormatCtx->streams[klvStreamIndex];
+    AVStream* outStream = avOutputCtxRec->streams[klvStreamIndexRec];
 
-    if (inStream->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
-        AVStream* outStream = avOutputCtxRec->streams[klvStreamIndexRec];
+    packet->stream_index = klvStreamIndexRec;
 
-        packet->stream_index = klvStreamIndexRec;
+    if (packet->pts != AV_NOPTS_VALUE) {
+        packet->pts = av_rescale_q(packet->pts, inStream->time_base, outStream->time_base);
+        packet->pts = std::max<int64_t>(packet->pts, lastPTS + 1);
+    }
 
-        packet->pts = av_rescale_q(packet->pts, avFormatCtx->streams[videoStreamIndexRec]->time_base, outStream->time_base);
-        packet->dts = packet->pts;
+    if (packet->dts != AV_NOPTS_VALUE) {
+        packet->dts = av_rescale_q(packet->dts, inStream->time_base, outStream->time_base);
+        packet->dts = std::max<int64_t>(packet->dts, lastDTS + 1);
+    }
 
-        packet->pos = -1;
+    lastPTS = packet->pts;
+    lastDTS = packet->dts;
 
-        av_interleaved_write_frame(avOutputCtxRec, packet);
+    packet->pos = -1;
+
+    int ret = av_interleaved_write_frame(avOutputCtxRec, packet);
+    if (ret < 0) {
+        char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
+        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
+        std::cerr << "Error writing data frame: " << errBuf << std::endl;
     }
 }
 
@@ -663,6 +675,9 @@ void FFMpegHandler::closeConnection() {
             avcodec_free_context(&avCodecCtx);
             avCodecCtx = nullptr;
         }
+
+        lastDTS = AV_NOPTS_VALUE;
+        lastPTS = AV_NOPTS_VALUE;
 
         std::cout << "Resources freed" << std::endl;
 
