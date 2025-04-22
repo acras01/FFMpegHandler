@@ -114,7 +114,7 @@ extern "C" {
                 env->CallVoidMethod(connectionCallback, onConnectedMethod);
                 };
 
-            FFMpegHandler::SubsCallback subtCallback = [env, subsCallback](long time) {
+            FFMpegHandler::SubsCallback subtCallback = [env, subsCallback](int64_t time) {
                 jclass subsCallbackClass = env->GetObjectClass(subsCallback);
                 jmethodID onRecordMethod = env->GetMethodID(subsCallbackClass, "onRecord", "(J)V");
                 env->CallVoidMethod(subsCallback, onRecordMethod, time);

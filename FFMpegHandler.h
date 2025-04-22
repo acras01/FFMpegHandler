@@ -9,6 +9,9 @@
 #include <thread>
 #include <string>
 #include <functional>
+#include <atomic>
+
+#include "ScopedFFmpegWrappers.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -31,13 +34,12 @@ static std::function<AVPixelFormat(AVCodecContext*, const enum AVPixelFormat*)> 
 
 class FFMpegHandler {
 public:
-
     FFMpegHandler();
     ~FFMpegHandler();
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
     using KlvCallback = std::function<void(const uint8_t* buffer, int size)>;
-    using SubsCallback = std::function<void(long time)>;
+    using SubsCallback = std::function<void(int64_t time)>;
     using ConnectionCallback = std::function<void()>;
 
     static AVPixelFormat getFormatWrapper(AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) {
@@ -70,18 +72,18 @@ private:
     bool isClosing = false;
     std::atomic<bool> isClosed = true;
 
-    const char* sourceUrl;
+    const char* sourceUrl = nullptr;
     std::string subSourceUrl;
     std::string outputUrl;
     std::string recordFilePath;
     AVCodecID avCodecId = AV_CODEC_ID_NONE;
-    AVDictionary* options = nullptr;
-    AVFormatContext* avFormatCtx = nullptr;
-    AVFrame* swFrame = nullptr;
-    AVFrame* pFrameRGB = nullptr;
-    AVPacket* avPacket = nullptr;
-    AVCodecContext* avCodecCtx = nullptr;
-    SwsContext* swsContext = nullptr;
+    ScopedAVDictionary options;
+    ScopedAVFormatCtx avFormatCtx;
+    ScopedAVFrame swFrame;
+    ScopedAVFrame pFrameRGB;
+    ScopedAVPacket avPacket;
+    ScopedAVCodecCtx avCodecCtx{ nullptr };
+    ScopedSwsContext swsContext;
     int bufferSize = 0;
     uint8_t* buffer = nullptr;
     int videoStreamIndex = -1;
@@ -89,10 +91,9 @@ private:
     const AVPixelFormat outputFormat = AV_PIX_FMT_BGR0;
     const AVPixelFormat inputFormat = AV_PIX_FMT_YUV420P;
 
-    //hw decoding
     const AVHWDeviceType hwDeviceType = AV_HWDEVICE_TYPE_D3D11VA;
-    AVBufferRef* hwDeviceCtx = nullptr;
-    AVFrame* hwFrame = nullptr;
+    ScopedAVBufferRef hwDeviceCtx;
+    ScopedAVFrame hwFrame;
     AVPixelFormat hwPixFmt = AV_PIX_FMT_NONE;
     AVPixelFormat inputHwFromat = AV_PIX_FMT_NV12;
 
@@ -117,8 +118,8 @@ private:
     void processRecDataOutput(AVPacket* packet);
     std::string processFrames(FrameCallback callback, SubsCallback subsCallback, KlvCallback klvCallback, int width, int height);
     ProcessResult processVideoFrame(SubsCallback subsCallback, int width, int height);
-    int findVideoStreamIndex();
-    int findKlvStreamIndex();
+    int findVideoStreamIndex() const;
+    int findKlvStreamIndex() const;
     void closeConnection();
 };
 

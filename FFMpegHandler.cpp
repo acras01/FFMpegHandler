@@ -1,3 +1,5 @@
+#define NOMINMAX
+
 #include "pch.h"
 #include "FFMpegHandler.h"
 #include "FFMpegHandlerJNI.h"
@@ -22,7 +24,7 @@ void ffmpeg_log_callback(void* ptr, int level, const char* fmt, va_list vl) {
     }
 }
 
-bool waitForDisconnect(std::atomic<bool>& closedFlag, int maxRetries = kMaxRetryCount) {
+static bool waitForDisconnect(std::atomic<bool>& closedFlag, int maxRetries = kMaxRetryCount) {
     int loops = 0;
     while (!closedFlag.load() && loops++ < maxRetries) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
@@ -30,7 +32,7 @@ bool waitForDisconnect(std::atomic<bool>& closedFlag, int maxRetries = kMaxRetry
     return closedFlag.load();
 }
 
-bool waitForInterruptClear(int maxRetries = kMaxRetryCount) {
+static bool waitForInterruptClear(int maxRetries = kMaxRetryCount) {
     int attempts = 0;
     while (interrupt_flag.load() && attempts++ < maxRetries) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
@@ -38,7 +40,7 @@ bool waitForInterruptClear(int maxRetries = kMaxRetryCount) {
     return !interrupt_flag.load();
 }
 
-LONG WINAPI MyUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
+static LONG WINAPI MyUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
     if (exceptionInfo->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
         std::cerr << "Access violation occurred at address: "
             << exceptionInfo->ExceptionRecord->ExceptionAddress << std::endl;
@@ -155,11 +157,11 @@ std::string FFMpegHandler::openInput() {
     int ret = -1;
 
     AVIOInterruptCB int_cb = { interrupt_callback, nullptr };
-    avFormatCtx = avformat_alloc_context();
+    avFormatCtx.ctx = avformat_alloc_context();
     if (!avFormatCtx) {
         return "Couldn't create input AVFormatContext";
     }
-    avFormatCtx->interrupt_callback = int_cb;
+    avFormatCtx.ctx->interrupt_callback = int_cb;
 
     ret = avformat_open_input(&avFormatCtx, sourceUrl, nullptr, &options);
     if (ret < 0) {
@@ -184,116 +186,97 @@ std::string FFMpegHandler::openInput() {
 }
 
 std::string FFMpegHandler::configureDecoder(const int width, const int height) {
-    AVCodecParameters* avCodecParams = avFormatCtx->streams[videoStreamIndex]->codecpar;
+    auto* stream = avFormatCtx.ctx->streams[videoStreamIndex];
+    AVCodecParameters* avCodecParams = stream->codecpar;
     avCodecId = avCodecParams->codec_id;
 
     char errBuf[AV_ERROR_MAX_STRING_SIZE] = { 0 };
-    int ret = -1;
 
     const AVCodec* avCodec = avcodec_find_decoder(avCodecId);
     if (!avCodec) {
-        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-        return std::string("Couldn't find decoder - ") + errBuf;
+        return "Couldn't find decoder";
     }
 
+    // Select supported hardware config
     for (int i = 0;; ++i) {
         const AVCodecHWConfig* config = avcodec_get_hw_config(avCodec, i);
-        if (!config) {
-            return "Decoder does not support defined h/w device type";
-        }
+        if (!config) return "Decoder does not support defined h/w device type";
 
-        if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) != 0 &&
+        if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
             config->device_type == hwDeviceType) {
             hwPixFmt = config->pix_fmt;
             break;
         }
     }
 
-    avCodecCtx = avcodec_alloc_context3(avCodec);
-    if (!avCodecCtx) {
-        return "Couldn't create AVCodecContext";
+    avCodecCtx.ctx = avcodec_alloc_context3(avCodec);
+    if (!avCodecCtx.ctx) return "Couldn't create AVCodecContext";
+
+    if (avcodec_parameters_to_context(avCodecCtx, avCodecParams) < 0) {
+        return "Couldn't initialize AVCodecContext";
     }
 
-    ret = avcodec_parameters_to_context(avCodecCtx, avCodecParams);
-    if (ret < 0) {
-        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-        return std::string("Couldn't initialize AVCodecContext - ") + errBuf;
-    }
+    avCodecCtx.ctx->thread_count = std::max(1u, std::thread::hardware_concurrency() / 2);
+    avCodecCtx.ctx->flags2 |= AV_CODEC_FLAG2_FAST;
+    avCodecCtx.ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
 
-    avCodecCtx->thread_count = max(1, std::thread::hardware_concurrency() / 2);
-    avCodecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
-    avCodecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
-
-    globalGetFormatLambda = [this](AVCodecContext* ctx, const enum AVPixelFormat* pix_fmts) -> AVPixelFormat {
-        const enum AVPixelFormat* p;
-        for (p = pix_fmts; *p != -1; p++) {
+    globalGetFormatLambda = [this](AVCodecContext*, const enum AVPixelFormat* pix_fmts) {
+        for (const enum AVPixelFormat* p = pix_fmts; *p != -1; ++p) {
             if (*p == this->hwPixFmt)
                 return *p;
         }
         std::cout << "Failed to get HW surface format" << std::endl;
         return AV_PIX_FMT_NONE;
         };
+    avCodecCtx.ctx->get_format = getFormatWrapper;
 
-    avCodecCtx->get_format = getFormatWrapper;
-
-    ret = av_hwdevice_ctx_create(&hwDeviceCtx, hwDeviceType, nullptr, nullptr, 0);
-    if (ret < 0) {
-        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-        return std::string("Failed to create specified HW device - ") + errBuf;
+    if (av_hwdevice_ctx_create(&hwDeviceCtx.ref, hwDeviceType, nullptr, nullptr, 0) < 0) {
+        return "Failed to create specified HW device";
     }
 
-    avCodecCtx->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
+    avCodecCtx.ctx->hw_device_ctx = av_buffer_ref(hwDeviceCtx);
 
-    ret = avcodec_open2(avCodecCtx, avCodec, nullptr);
-    if (ret < 0) {
-        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-        return std::string("Couldn't open codec - ") + errBuf;
+    if (avcodec_open2(avCodecCtx, avCodec, nullptr) < 0) {
+        return "Couldn't open codec";
     }
 
-    swsContext = sws_getContext(
+    swsContext.ctx = sws_getContext(
         width, height, inputHwFromat,
         width, height, outputFormat,
         SWS_BILINEAR, nullptr, nullptr, nullptr
     );
-    if (!swsContext) {
-        return "Couldn't initialize SwsContext";
-    }
+    if (!swsContext.ctx) return "Couldn't initialize SwsContext";
 
-    hwFrame = av_frame_alloc();
-    swFrame = av_frame_alloc();
-    pFrameRGB = av_frame_alloc();
-    if (!hwFrame || !swFrame || !pFrameRGB) {
+    hwFrame.frame = av_frame_alloc();
+    swFrame.frame = av_frame_alloc();
+    pFrameRGB.frame = av_frame_alloc();
+    if (!hwFrame.frame || !swFrame.frame || !pFrameRGB.frame) {
         return "Couldn't allocate AVFrame";
     }
 
-    pFrameRGB->width = width;
-    pFrameRGB->height = height;
-    pFrameRGB->format = outputFormat;
+    pFrameRGB.frame->width = width;
+    pFrameRGB.frame->height = height;
+    pFrameRGB.frame->format = outputFormat;
 
-    ret = av_frame_get_buffer(pFrameRGB, 32);
-    if (ret < 0) {
-        av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
-        return std::string("Failed to allocate RGB frame buffer - ") + errBuf;
+    if (av_frame_get_buffer(pFrameRGB, 32) < 0) {
+        return "Failed to allocate RGB frame buffer";
     }
 
     bufferSize = av_image_get_buffer_size(outputFormat, width, height, 1);
     buffer = (uint8_t*)av_malloc(bufferSize);
-    if (!buffer) {
-        return "Failed to allocate buffer";
-    }
-    av_image_fill_arrays(pFrameRGB->data, pFrameRGB->linesize, buffer, outputFormat, width, height, 1);
+    if (!buffer) return "Failed to allocate buffer";
 
-    avPacket = av_packet_alloc();
-    if (!avPacket) {
-        return "Couldn't allocate AVPacket";
-    }
+    av_image_fill_arrays(pFrameRGB.frame->data, pFrameRGB.frame->linesize, buffer, outputFormat, width, height, 1);
+
+    avPacket.packet = av_packet_alloc();
+    if (!avPacket.packet) return "Couldn't allocate AVPacket";
 
     return "";
 }
 
-int FFMpegHandler::findVideoStreamIndex() {
-    for (unsigned int i = 0; i < avFormatCtx->nb_streams; i++) {
-        if (avFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+int FFMpegHandler::findVideoStreamIndex() const {
+    for (unsigned int i = 0; i < avFormatCtx.ctx->nb_streams; i++) {
+        if (avFormatCtx.ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
             return i;
         }
     }
@@ -301,9 +284,9 @@ int FFMpegHandler::findVideoStreamIndex() {
     return -1;
 }
 
-int FFMpegHandler::findKlvStreamIndex() {
-    for (unsigned int i = 0; i < avFormatCtx->nb_streams; i++) {
-        if (avFormatCtx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
+int FFMpegHandler::findKlvStreamIndex() const {
+    for (unsigned int i = 0; i < avFormatCtx.ctx->nb_streams; i++) {
+        if (avFormatCtx.ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_DATA) {
             return i;
         }
     }
@@ -320,8 +303,8 @@ std::string FFMpegHandler::setupUdpOutput() {
         return "Failed to allocate AVFormatContext for udp";
     }
 
-    for (unsigned int i = 0; i < avFormatCtx->nb_streams; ++i) {
-        AVStream* inStream = avFormatCtx->streams[i];
+    for (unsigned int i = 0; i < avFormatCtx.ctx->nb_streams; ++i) {
+        AVStream* inStream = avFormatCtx.ctx->streams[i];
         AVStream* outStream = avformat_new_stream(avOutputCtxUdp, nullptr);
         if (!outStream) {
             return "Failed to allocate output stream for udp";
@@ -499,7 +482,7 @@ std::string FFMpegHandler::processFrames(FrameCallback callback, SubsCallback su
             }
         }
 
-        if (avPacket->stream_index == videoStreamIndex) {
+        if (avPacket.packet->stream_index == videoStreamIndex) {
             ProcessResult pResult = processVideoFrame(subsCallback, width, height);
             if (pResult.message.empty() && pResult.buffer) {
                 callback(pResult.buffer, av_image_get_buffer_size(outputFormat, width, height, 1));
@@ -508,9 +491,9 @@ std::string FFMpegHandler::processFrames(FrameCallback callback, SubsCallback su
                 std::cerr << "Error processing frame: " << pResult.message << std::endl;
             }
         }
-        else if (avPacket->stream_index == klvStreamIndex) {
-            uint8_t* klvData = avPacket->data;
-            int klvSize = avPacket->size;
+        else if (avPacket.packet->stream_index == klvStreamIndex) {
+            uint8_t* klvData = avPacket.packet->data;
+            int klvSize = avPacket.packet->size;
             if (klvData && klvSize > 0)
                 klvCallback(klvData, klvSize);
 
@@ -534,7 +517,7 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
 
     while ((ret = avcodec_receive_frame(avCodecCtx, hwFrame)) == 0) {
         AVFrame* tmpFrame;
-        if (hwFrame->format == hwPixFmt) {
+        if (hwFrame.frame->format == hwPixFmt) {
             ret = av_hwframe_transfer_data(swFrame, hwFrame, 0);
             if (ret < 0) {
                 av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
@@ -551,7 +534,7 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
             tmpFrame = hwFrame;
         }
 
-        ret = sws_scale(swsContext, tmpFrame->data, tmpFrame->linesize, 0, height, pFrameRGB->data, pFrameRGB->linesize);
+        ret = sws_scale(swsContext, tmpFrame->data, tmpFrame->linesize, 0, height, pFrameRGB.frame->data, pFrameRGB.frame->linesize);
         if (ret < 0) {
             av_strerror(ret, errBuf, AV_ERROR_MAX_STRING_SIZE);
             av_frame_unref(hwFrame);
@@ -559,7 +542,7 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
             return { errBuf, nullptr };
         }
 
-        memcpy(buffer, pFrameRGB->data[0], bufferSize);
+        memcpy(buffer, pFrameRGB.frame->data[0], bufferSize);
 
         if (isRecOutputSet) {
             processRecVideoOutput(subsCallback, avPacket);
@@ -573,39 +556,44 @@ ProcessResult FFMpegHandler::processVideoFrame(SubsCallback subsCallback, const 
 }
 
 void FFMpegHandler::processUdpOutput(AVPacket* packet) {
-    if (avOutputCtxUdp) {
-        int streamIndex = packet->stream_index;
-        AVStream* inStream = avFormatCtx->streams[streamIndex];
-        AVStream* outStream = avOutputCtxUdp->streams[streamMapping.at(streamIndex)];
-        AVRounding rnd = (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
+    if (!avOutputCtxUdp || !packet) return;
 
-        packet->stream_index = streamMapping.at(streamIndex);
-        packet->pts = av_rescale_q_rnd(packet->pts, inStream->time_base, outStream->time_base, rnd);
-        packet->dts = av_rescale_q_rnd(packet->dts, inStream->time_base, outStream->time_base, rnd);
-        packet->duration = av_rescale_q(packet->duration, inStream->time_base, outStream->time_base);
-        packet->pos = -1;
+    int streamIndex = packet->stream_index;
 
-        av_interleaved_write_frame(avOutputCtxUdp, packet);
-    }
+    if (streamMapping.find(streamIndex) == streamMapping.end()) return;
+
+    AVStream* inStream = avFormatCtx.ctx->streams[streamIndex];
+    AVStream* outStream = avOutputCtxUdp->streams[streamMapping[streamIndex]];
+    AVRounding rnd = (AVRounding)(AV_ROUND_NEAR_INF | AV_ROUND_PASS_MINMAX);
+
+    packet->stream_index = streamMapping[streamIndex];
+    packet->pts = av_rescale_q_rnd(packet->pts, inStream->time_base, outStream->time_base, rnd);
+    packet->dts = av_rescale_q_rnd(packet->dts, inStream->time_base, outStream->time_base, rnd);
+    packet->duration = av_rescale_q(packet->duration, inStream->time_base, outStream->time_base);
+    packet->pos = -1;
+
+    av_interleaved_write_frame(avOutputCtxUdp, packet);
 }
 
+
 void FFMpegHandler::processRecVideoOutput(SubsCallback subsCallback, AVPacket* packet) {
-    if (!avOutputCtxRec || !packet) return;
+    if (!avOutputCtxRec || !packet || videoStreamIndexRec < 0) return;
 
     AVStream* outStream = avOutputCtxRec->streams[videoStreamIndexRec];
 
     packet->stream_index = videoStreamIndexRec;
-
     packet->pts = currentPtsRec;
     packet->dts = packet->pts;
 
-    int64_t duration = static_cast<int64_t>(av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1);
+    int64_t duration = static_cast<int64_t>(
+        av_q2d(av_div_q(av_inv_q(outStream->time_base), frameRate)) * 1
+        );
     packet->duration = duration;
     currentPtsRec += duration;
 
     packet->pos = -1;
 
-    subsCallback(packet->pts);
+    if (subsCallback) subsCallback(packet->pts);
 
     int ret = av_interleaved_write_frame(avOutputCtxRec, packet);
     if (ret < 0) {
@@ -616,26 +604,23 @@ void FFMpegHandler::processRecVideoOutput(SubsCallback subsCallback, AVPacket* p
 }
 
 void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
-    if (!avOutputCtxRec || !avFormatCtx) return;
+    if (!avOutputCtxRec || !avFormatCtx || !packet || !packet->data || packet->size <= 0) return;
 
-    if (!packet || !packet->data || packet->size <= 0) {
-        std::cerr << "Error: Packet data is invalid or has been freed!" << std::endl;
-        return;
-    }
+    if (klvStreamIndex < 0 || klvStreamIndexRec < 0) return;
 
-    AVStream* inStream = avFormatCtx->streams[klvStreamIndex];
+    AVStream* inStream = avFormatCtx.ctx->streams[klvStreamIndex];
     AVStream* outStream = avOutputCtxRec->streams[klvStreamIndexRec];
 
     packet->stream_index = klvStreamIndexRec;
 
     if (packet->pts != AV_NOPTS_VALUE) {
         packet->pts = av_rescale_q(packet->pts, inStream->time_base, outStream->time_base);
-        packet->pts = std::max<int64_t>(packet->pts, lastPTS + 1);
+        packet->pts = std::max(packet->pts, lastPTS + 1);
     }
 
     if (packet->dts != AV_NOPTS_VALUE) {
         packet->dts = av_rescale_q(packet->dts, inStream->time_base, outStream->time_base);
-        packet->dts = std::max<int64_t>(packet->dts, lastDTS + 1);
+        packet->dts = std::max(packet->dts, lastDTS + 1);
     }
 
     lastPTS = packet->pts;
@@ -666,17 +651,10 @@ void FFMpegHandler::closeConnection() {
 
     interrupt_flag.store(true);
 
-    if (avFormatCtx) {
-        avformat_close_input(&avFormatCtx);
-        avFormatCtx = nullptr;
-    }
-
     if (isRecOutputSet && avOutputCtxRec) {
         av_write_trailer(avOutputCtxRec);
-
         if (avOutputCtxRec->pb)
             avio_closep(&avOutputCtxRec->pb);
-
         avformat_free_context(avOutputCtxRec);
         avOutputCtxRec = nullptr;
         isRecOutputSet = false;
@@ -689,53 +667,17 @@ void FFMpegHandler::closeConnection() {
 
     if (isUdpOutputSet && avOutputCtxUdp) {
         av_write_trailer(avOutputCtxUdp);
-
         if (avOutputCtxUdp->pb)
             avio_closep(&avOutputCtxUdp->pb);
-
         avformat_free_context(avOutputCtxUdp);
         avOutputCtxUdp = nullptr;
         isUdpOutputSet = false;
     }
 
-    if (options) {
-        av_dict_free(&options);
-        options = nullptr;
-    }
-
-    if (avPacket) {
-        av_packet_free(&avPacket);
-        avPacket = nullptr;
-    }
-
-    if (pFrameRGB) {
-        av_frame_free(&pFrameRGB);
-        pFrameRGB = nullptr;
-    }
-
-    if (swFrame) {
-        av_frame_free(&swFrame);
-        swFrame = nullptr;
-    }
-
-    if (hwFrame) {
-        av_frame_free(&hwFrame);
-        hwFrame = nullptr;
-    }
-
-    if (hwDeviceCtx) {
-        av_buffer_unref(&hwDeviceCtx);
-        hwDeviceCtx = nullptr;
-    }
-
-    if (swsContext) {
-        sws_freeContext(swsContext);
-        swsContext = nullptr;
-    }
-
-    if (avCodecCtx) {
-        avcodec_free_context(&avCodecCtx);
-        avCodecCtx = nullptr;
+    // buffer is manually allocated
+    if (buffer) {
+        av_free(buffer);
+        buffer = nullptr;
     }
 
     lastDTS = AV_NOPTS_VALUE;
@@ -747,3 +689,4 @@ void FFMpegHandler::closeConnection() {
     isClosing = false;
     interrupt_flag.store(false);
 }
+
