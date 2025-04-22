@@ -68,7 +68,8 @@ private:
     bool isUdpOutputSet = false;
     bool isRecOutputSet = false;
     bool isClosing = false;
-    bool isClosed = true;
+    std::atomic<bool> isClosed = true;
+
     const char* sourceUrl;
     std::string subSourceUrl;
     std::string outputUrl;
