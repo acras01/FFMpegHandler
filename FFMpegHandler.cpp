@@ -4,16 +4,12 @@
 #include "FFMpegHandler.h"
 #include "FFMpegHandlerJNI.h"
 
-std::atomic<bool> interrupt_flag(false);
-
 constexpr int kMaxRetryCount = 100;
 constexpr int kRetryDelayMs = 10;
 
-int interrupt_callback(void* ctx) {
-    if (interrupt_flag.load()) {
-        return 1;
-    }
-    return 0;
+static int interrupt_callback(void* ctx) {
+    auto* handler = static_cast<FFMpegHandler*>(ctx);
+    return handler->interruptFlag.load() ? 1 : 0;
 }
 
 void ffmpeg_log_callback(void* ptr, int level, const char* fmt, va_list vl) {
@@ -30,14 +26,6 @@ static bool waitForDisconnect(std::atomic<bool>& closedFlag, int maxRetries = kM
         std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
     }
     return closedFlag.load();
-}
-
-static bool waitForInterruptClear(int maxRetries = kMaxRetryCount) {
-    int attempts = 0;
-    while (interrupt_flag.load() && attempts++ < maxRetries) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
-    }
-    return !interrupt_flag.load();
 }
 
 static LONG WINAPI MyUnhandledExceptionFilter(EXCEPTION_POINTERS* exceptionInfo) {
@@ -59,6 +47,14 @@ FFMpegHandler::FFMpegHandler() {
 // Destructor
 FFMpegHandler::~FFMpegHandler() {
     closeConnection();
+}
+
+bool FFMpegHandler::waitForInterruptClear(int maxRetries) {
+    int attempts = 0;
+    while (interruptFlag.load() && attempts++ < maxRetries) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kRetryDelayMs));
+    }
+    return !interruptFlag.load();
 }
 
 std::string FFMpegHandler::connect(
@@ -85,7 +81,7 @@ std::string FFMpegHandler::connect(
             return "Couldn't connect - previous connection not closed";
         }
 
-        interrupt_flag.store(false, std::memory_order_release);
+        interruptFlag.store(false, std::memory_order_release);
 
         this->sourceUrl = sourceUrl;
 
@@ -97,7 +93,7 @@ std::string FFMpegHandler::connect(
             std::cout << "Setting option " << key << std::endl;
         }
 
-        if (!waitForInterruptClear()) {
+        if (!waitForInterruptClear(kMaxRetryCount)) {
             disconnect();
             closeConnection();
             return "Couldn't open video source - input is still busy";
@@ -639,7 +635,7 @@ void FFMpegHandler::processRecDataOutput(AVPacket* packet) {
 void FFMpegHandler::disconnect() {
     std::cout << "Disconnecting" << std::endl;
 
-    interrupt_flag.store(true, std::memory_order_release);
+    interruptFlag.store(true, std::memory_order_release);
     isConnected = false;
 }
 
@@ -649,7 +645,7 @@ void FFMpegHandler::closeConnection() {
     isClosing = true;
     std::cout << "Freeing resources" << std::endl;
 
-    interrupt_flag.store(true);
+    interruptFlag.store(true);
 
     if (isRecOutputSet && avOutputCtxRec) {
         av_write_trailer(avOutputCtxRec);
@@ -674,7 +670,6 @@ void FFMpegHandler::closeConnection() {
         isUdpOutputSet = false;
     }
 
-    // buffer is manually allocated
     if (buffer) {
         av_free(buffer);
         buffer = nullptr;
@@ -687,6 +682,6 @@ void FFMpegHandler::closeConnection() {
 
     isClosed = true;
     isClosing = false;
-    interrupt_flag.store(false);
+    interruptFlag.store(false);
 }
 

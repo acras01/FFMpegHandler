@@ -29,13 +29,15 @@ struct ProcessResult {
 };
 
 void ffmpeg_log_callback(void* ptr, int level, const char* fmt, va_list vl);
-int interrupt_callback(void* ctx);
+static int interrupt_callback(void* ctx);
 static std::function<AVPixelFormat(AVCodecContext*, const enum AVPixelFormat*)> globalGetFormatLambda;
 
 class FFMpegHandler {
 public:
     FFMpegHandler();
     ~FFMpegHandler();
+
+    std::atomic<bool> interruptFlag = false;
 
     using FrameCallback = std::function<void(const uint8_t* buffer, int size)>;
     using KlvCallback = std::function<void(const uint8_t* buffer, int size)>;
@@ -121,6 +123,7 @@ private:
     int findVideoStreamIndex() const;
     int findKlvStreamIndex() const;
     void closeConnection();
+    bool waitForInterruptClear(int maxRetries);
 };
 
 #endif // FFMPEGHANDLER_H
